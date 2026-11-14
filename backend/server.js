@@ -1,5 +1,7 @@
 const express = require('express');
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const dotenv = require('dotenv');
@@ -13,6 +15,13 @@ if (process.env.NODE_ENV === 'production') {
   if (missingEnvVars.length) {
     throw new Error(`Missing required production environment variables: ${missingEnvVars.join(', ')}`);
   }
+}
+
+const frontendBuildPath = path.join(__dirname, '../frontend/build');
+const frontendIndexPath = path.join(frontendBuildPath, 'index.html');
+
+if (process.env.NODE_ENV === 'production' && !fs.existsSync(frontendIndexPath)) {
+  throw new Error('Frontend build is missing. Build frontend before starting the production server.');
 }
 
 const allowedOrigins = [
@@ -91,19 +100,6 @@ app.use('/api/payments', require('./routes/payments'));
 app.use('/api/reviews', require('./routes/reviews'));
 app.use('/api/ai', require('./routes/ai'));
 
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ message: err.message || 'Something went wrong on the server' });
-});
-
-
-
-// Root route (KEEP THIS ABOVE listen)
-app.get("/", (req, res) => {
-  res.send("Backend is running 🚀");
-});
-
 app.get('/health', (req, res) => {
   if (mongoose.connection.readyState !== 1) {
     return res.status(503).json({ status: 'unavailable', database: 'disconnected' });
@@ -111,10 +107,27 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
+if (fs.existsSync(frontendIndexPath)) {
+  app.use(express.static(frontendBuildPath));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api/')) return next();
+    res.sendFile(frontendIndexPath, (error) => {
+      if (error) next(error);
+    });
+  });
+} else {
+  app.get('/', (req, res) => {
+    res.send('Backend is running');
+  });
+}
+
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  res.status(500).json({ message: err.message || 'Something went wrong on the server' });
+});
+
 const PORT = process.env.PORT || 5000;
 
-// ❌ REMOVE app.listen()
-// ✅ ONLY USE THIS:
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });

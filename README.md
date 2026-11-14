@@ -36,7 +36,7 @@ frontend/
     context/    Authentication state
     pages/      Application pages
     utils/      API client
-render.yaml     Render Blueprint for the frontend and backend
+render.yaml     Render Blueprint for one combined web service
 ```
 
 ## Run locally
@@ -92,8 +92,21 @@ Frontend build-time variables:
 
 | Variable | Purpose |
 | --- | --- |
-| `REACT_APP_API_URL` | Backend API base URL, including `/api`, e.g. `https://your-service.onrender.com/api`. |
-| `REACT_APP_SOCKET_URL` | Optional Socket.IO server origin, e.g. `https://your-service.onrender.com`. If omitted, chat derives it from `REACT_APP_API_URL`. |
+| `REACT_APP_API_URL` | API base URL, including `/api`. Use `/api` when frontend and backend are served by the same domain. |
+| `REACT_APP_SOCKET_URL` | Optional Socket.IO server origin. If omitted, chat derives it from `REACT_APP_API_URL` or the current page origin. |
 | `REACT_APP_RAZORPAY_KEY_ID` | Optional public Razorpay key ID for the payment UI. |
 
 For Create React App, frontend variables must be present when the frontend is built; changing hosting environment values requires a new frontend build/deployment.
+
+## Deploy frontend and backend together on Render
+
+The [`render.yaml`](./render.yaml) Blueprint defines a **single Node web service** named `flex`. Render builds the React frontend during deployment, then starts the Express backend, which serves the frontend, REST API, and Socket.IO WebSocket on the same domain. Do not create a separate Render Static Site for this setup.
+
+1. Push the repository to GitHub.
+2. In Render, choose **New → Blueprint**, select this repository, and apply the Blueprint.
+3. In the `flex` service's environment settings, set `MONGODB_URI` to your production MongoDB connection string and `JWT_SECRET` to a strong, unique secret.
+4. The Blueprint sets `REACT_APP_API_URL=/api`, so frontend API calls use the same domain. Chat connects to that domain over WebSocket as well.
+5. Set `CLIENT_URL` to the exact public origin of the combined service (scheme and hostname only, no path or trailing slash), for example `https://flex.onrender.com`. Render will ask for it when you apply the Blueprint. If you use multiple frontend origins, add them as a comma-separated `CLIENT_URLS` environment variable.
+6. Add any integration credentials you use (Gemini, Razorpay, SMTP) to the same Render service's environment settings. Keep secrets out of `render.yaml` and GitHub.
+
+The Render build installs dependencies from both lockfiles and builds `frontend/build`. Production startup checks that build exists. The service root serves the Flex app, `/api/...` serves backend routes, and `/health` returns `{"status":"ok"}` after MongoDB connects. If MongoDB is unavailable, `/health` returns HTTP `503`.
