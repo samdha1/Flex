@@ -22,7 +22,10 @@ export default function Messages() {
   const typingTimeout = useRef(null);
 
   useEffect(() => {
-    socket = io(process.env.REACT_APP_SOCKET_URL || 'http://localhost:5000');
+    const socketUrl = process.env.REACT_APP_SOCKET_URL
+      || API.defaults.baseURL.replace(/\/api\/?$/, '')
+      || window.location.origin;
+    socket = io(socketUrl, { transports: ['websocket'] });
     socket.emit('join', user._id);
     return () => socket.disconnect();
   }, [user._id]);

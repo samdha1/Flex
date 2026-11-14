@@ -8,56 +8,42 @@ const { Server } = require('socket.io');
 // Load env vars
 dotenv.config();
 
+if (process.env.NODE_ENV === 'production') {
+  const missingEnvVars = ['MONGODB_URI', 'JWT_SECRET'].filter((key) => !process.env[key]);
+  if (missingEnvVars.length) {
+    throw new Error(`Missing required production environment variables: ${missingEnvVars.join(', ')}`);
+  }
+}
+
+const allowedOrigins = [
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+  ...(process.env.CLIENT_URL || '').split(','),
+  ...(process.env.CLIENT_URLS || '').split(','),
+].map((origin) => origin.trim()).filter(Boolean);
+
+const corsOrigin = (origin, callback) => {
+  callback(null, !origin || allowedOrigins.includes(origin));
+};
+
 const app = express();
 const server = http.createServer(app);
 
-// Socket.IO for real-time messaging
 const io = new Server(server, {
+  transports: ['websocket'],
   cors: {
-    origin: (origin, callback) => {
-      if (!origin) return callback(null, true);
-
-      if (origin.includes("vercel.app")) {
-        return callback(null, true);
-      }
-
-      if (allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-
-      return callback("Not allowed by CORS");
-    },
-    methods: ["GET", "POST"],
+    origin: corsOrigin,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     credentials: true,
   },
 });
 
-window = { io }; // Just to store io globally for controllers if needed, or pass it via middleware
 global.io = io;
 
 // Middleware
-const allowedOrigins = [
-  "http://localhost:3000",
-  "http://127.0.0.1:3000",
-  "https://flex13.vercel.app"
-];
-
 // Express CORS
 app.use(cors({
-  origin: function (origin, callback) {
-    if (!origin) return callback(null, true);
-
-    // Allow all Vercel preview deployments
-    if (origin.includes("vercel.app")) {
-      return callback(null, true);
-    }
-
-    if (allowedOrigins.includes(origin)) {
-      return callback(null, true);
-    }
-
-    return callback(new Error("Not allowed by CORS"));
-  },
+  origin: corsOrigin,
   credentials: true,
 }));
 app.use(express.json());
@@ -116,6 +102,13 @@ app.use((err, req, res, next) => {
 // Root route (KEEP THIS ABOVE listen)
 app.get("/", (req, res) => {
   res.send("Backend is running 🚀");
+});
+
+app.get('/health', (req, res) => {
+  if (mongoose.connection.readyState !== 1) {
+    return res.status(503).json({ status: 'unavailable', database: 'disconnected' });
+  }
+  res.json({ status: 'ok' });
 });
 
 const PORT = process.env.PORT || 5000;
