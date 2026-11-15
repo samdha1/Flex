@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 
 const projectSchema = new mongoose.Schema({
   title: { type: String, required: true },
-  description: { type: String, required: true },
+  description: { type: String, required: true, maxlength: 10000 },
   category: { type: String, required: true },
   client: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   
@@ -38,5 +38,8 @@ projectSchema.pre('save', function(next) {
   this.updatedAt = Date.now();
   next();
 });
+
+projectSchema.index({ status: 1, visibility: 1, createdAt: -1 });
+projectSchema.index({ client: 1, createdAt: -1 });
 
 module.exports = mongoose.model('Project', projectSchema);

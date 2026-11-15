@@ -10,7 +10,7 @@ const userSchema = new mongoose.Schema({
   avatar: { type: String },
   
   // Profile
-  bio: { type: String },
+  bio: { type: String, maxlength: 1000 },
   location: { type: String },
   phone: { type: String },
   

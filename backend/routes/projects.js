@@ -1,6 +1,8 @@
 const express = require('express');
 const router = express.Router();
+const jwt = require('jsonwebtoken');
 const Project = require('../models/Project');
+const User = require('../models/User');
 const { protect, authorize } = require('../middleware/authMiddleware');
 const {
   escapeRegex,
@@ -8,6 +10,31 @@ const {
   parsePagination,
   sendError,
 } = require('../utils/validate');
+
+const isProjectClient = async (req, project) => {
+  const authorization = req.get('authorization') || '';
+  const bearer = authorization.match(/^Bearer\s+(.+)$/i);
+  if (!bearer) return false;
+
+  let decoded;
+  try {
+    decoded = jwt.verify(bearer[1], process.env.JWT_SECRET, { algorithms: ['HS256'] });
+  } catch {
+    return false;
+  }
+
+  if (
+    typeof decoded !== 'object'
+    || decoded === null
+    || decoded.purpose !== undefined
+    || !isValidObjectId(decoded.id)
+    || decoded.id !== project.client?._id?.toString()
+  ) {
+    return false;
+  }
+
+  return Boolean(await User.exists({ _id: decoded.id }));
+};
 
 router.get('/', async (req, res) => {
   try {
@@ -114,9 +141,18 @@ router.get('/:id', async (req, res) => {
     }
     const project = await Project.findById(req.params.id).populate('client', 'name company rating reviewCount avatar createdAt');
     if (!project) return res.status(404).json({ message: 'Project not found' });
+
+    if (
+      ['draft', 'cancelled'].includes(project.status)
+      || project.visibility === 'invite_only'
+    ) {
+      if (!await isProjectClient(req, project)) {
+        return res.status(404).json({ message: 'Project not found' });
+      }
+    }
     
-    project.views += 1;
-    await project.save();
+    await Project.updateOne({ _id: project._id }, { $inc: { views: 1 } });
+    project.views = (project.views || 0) + 1;
     
     res.json({ project });
   } catch (error) {
@@ -126,10 +162,74 @@ router.get('/:id', async (req, res) => {
 
 router.post('/', protect, authorize('client'), async (req, res) => {
   try {
+    if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+      return res.status(400).json({ message: 'A valid request body is required.' });
+    }
+    const body = req.body;
+    if (
+      typeof body.title !== 'string' || !body.title.trim()
+      || typeof body.description !== 'string' || !body.description.trim()
+      || typeof body.category !== 'string' || !body.category.trim()
+    ) {
+      return res.status(400).json({ message: 'Title, description, and category are required.' });
+    }
+    if (
+      typeof body.budgetMin !== 'number' || !Number.isFinite(body.budgetMin) || body.budgetMin < 0
+      || typeof body.budgetMax !== 'number' || !Number.isFinite(body.budgetMax) || body.budgetMax < 0
+      || body.budgetMin > body.budgetMax
+    ) {
+      return res.status(400).json({ message: 'Budgets must be non-negative numbers and minimum must not exceed maximum.' });
+    }
+    if (
+      (body.skills !== undefined && (!Array.isArray(body.skills) || body.skills.some(skill => typeof skill !== 'string')))
+      || (body.tags !== undefined && (!Array.isArray(body.tags) || body.tags.some(tag => typeof tag !== 'string')))
+    ) {
+      return res.status(400).json({ message: 'Skills and tags must be arrays of strings.' });
+    }
+    if (
+      body.saveAsDraft !== undefined && typeof body.saveAsDraft !== 'boolean'
+    ) {
+      return res.status(400).json({ message: 'saveAsDraft must be a boolean.' });
+    }
+    if (
+      body.milestones !== undefined
+      && (!Array.isArray(body.milestones) || body.milestones.some(milestone => (
+        !milestone
+        || typeof milestone !== 'object'
+        || Array.isArray(milestone)
+        || typeof milestone.title !== 'string'
+        || !milestone.title.trim()
+        || (milestone.description !== undefined && typeof milestone.description !== 'string')
+        || typeof milestone.amount !== 'number'
+        || !Number.isFinite(milestone.amount)
+      )))
+    ) {
+      return res.status(400).json({ message: 'Milestones must include a title and numeric amount.' });
+    }
+
+    const projectData = {};
+    const allowedFields = [
+      'title', 'description', 'category', 'skills', 'tags', 'budgetType',
+      'budgetMin', 'budgetMax', 'experienceLevel', 'projectLength',
+      'deadline', 'visibility',
+    ];
+    for (const field of allowedFields) {
+      if (Object.prototype.hasOwnProperty.call(body, field) && !(field === 'deadline' && body[field] === '')) {
+        projectData[field] = body[field];
+      }
+    }
+    if (body.milestones !== undefined) {
+      projectData.milestones = body.milestones.map(({ title, description, amount }) => ({
+        title,
+        description,
+        amount,
+      }));
+    }
+
     const project = await Project.create({
-      ...req.body,
+      ...projectData,
       client: req.user._id,
-      status: req.body.saveAsDraft ? 'draft' : 'open'
+      status: body.saveAsDraft ? 'draft' : 'open'
     });
     res.status(201).json({ project });
   } catch (error) {

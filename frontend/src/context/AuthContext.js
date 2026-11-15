@@ -16,10 +16,12 @@ export const AuthProvider = ({ children }) => {
       const { data } = await API.get('/auth/me');
       setUser(data.user);
       localStorage.setItem('flex_user', JSON.stringify(data.user));
-    } catch {
-      localStorage.removeItem('flex_token');
-      localStorage.removeItem('flex_user');
-      setUser(null);
+    } catch (error) {
+      if (error.response?.status === 401) {
+        localStorage.removeItem('flex_token');
+        localStorage.removeItem('flex_user');
+        setUser(null);
+      }
     } finally {
       setLoading(false);
     }

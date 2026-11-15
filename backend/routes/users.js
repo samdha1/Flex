@@ -76,8 +76,35 @@ router.get('/:id/profile', async (req, res) => {
 
 router.put('/portfolio/add', protect, async (req, res) => {
   try {
+    if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+      return res.status(400).json({ message: 'A valid request body is required.' });
+    }
+    const { title, description, url } = req.body;
+    const normalizedUrl = typeof url === 'string' ? url.trim() : url;
+    if (typeof title !== 'string' || !title.trim() || title.length > 100) {
+      return res.status(400).json({ message: 'Portfolio title must be a non-empty string of at most 100 characters.' });
+    }
+    if (description !== undefined && (typeof description !== 'string' || description.length > 500)) {
+      return res.status(400).json({ message: 'Portfolio description must be a string of at most 500 characters.' });
+    }
+    if (
+      normalizedUrl !== undefined
+      && normalizedUrl !== ''
+      && (typeof normalizedUrl !== 'string' || normalizedUrl.length > 300 || !/^https?:\/\//i.test(normalizedUrl))
+    ) {
+      return res.status(400).json({ message: 'Portfolio URL must be an HTTP(S) URL of at most 300 characters.' });
+    }
+
     const user = await User.findById(req.user._id);
-    user.portfolio.push(req.body);
+    if (!user) return res.status(404).json({ message: 'User not found.' });
+    if (user.portfolio.length >= 20) {
+      return res.status(400).json({ message: 'A maximum of 20 portfolio items is allowed.' });
+    }
+    user.portfolio.push({
+      title: title.trim(),
+      description: description?.trim() || '',
+      url: normalizedUrl || '',
+    });
     await user.save();
     res.json({ portfolio: user.portfolio });
   } catch (error) {

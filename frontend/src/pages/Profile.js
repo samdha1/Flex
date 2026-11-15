@@ -231,7 +231,7 @@ export default function Profile() {
                       <button onClick={() => handleRemovePortfolio(item._id)} style={{ background: 'none', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: '1rem' }}>×</button>
                     </div>
                     {item.description && <p style={{ color: 'var(--text2)', fontSize: '0.82rem', marginBottom: 10, lineHeight: 1.5 }}>{item.description}</p>}
-                    {item.url && <a href={item.url} target="_blank" rel="noopener noreferrer" className="btn btn-secondary btn-sm">🔗 View Project</a>}
+                    {typeof item.url === 'string' && /^https?:\/\//i.test(item.url) && <a href={item.url} target="_blank" rel="noopener noreferrer" className="btn btn-secondary btn-sm">🔗 View Project</a>}
                   </div>
                 ))}
               </div>

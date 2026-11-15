@@ -21,5 +21,7 @@ const paymentSchema = new mongoose.Schema({
 });
 
 paymentSchema.index({ razorpayPaymentId: 1 }, { unique: true, sparse: true });
+paymentSchema.index({ client: 1, createdAt: -1 });
+paymentSchema.index({ freelancer: 1, createdAt: -1 });
 
 module.exports = mongoose.model('Payment', paymentSchema);

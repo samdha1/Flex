@@ -86,7 +86,7 @@ export default function FreelancerProfile() {
                 <div key={i} style={{ background: 'var(--bg3)', borderRadius: 10, padding: 16 }}>
                   <div style={{ fontWeight: 600, marginBottom: 6 }}>{item.title}</div>
                   <p style={{ color: 'var(--text2)', fontSize: '0.85rem', lineHeight: 1.6 }}>{item.description}</p>
-                  {item.url && <a href={item.url} target="_blank" rel="noreferrer" style={{ fontSize: '0.82rem', color: 'var(--accent2)', marginTop: 8, display: 'inline-block' }}>View Project →</a>}
+                  {typeof item.url === 'string' && /^https?:\/\//i.test(item.url) && <a href={item.url} target="_blank" rel="noreferrer" style={{ fontSize: '0.82rem', color: 'var(--accent2)', marginTop: 8, display: 'inline-block' }}>View Project →</a>}
                 </div>
               ))}
             </div>

@@ -4,7 +4,15 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const User = require('../models/User');
 const Project = require('../models/Project');
 const { protect, authorize } = require('../middleware/authMiddleware');
-const { isValidObjectId } = require('../utils/validate');
+const { createRateLimiter } = require('../middleware/rateLimit');
+const { isValidObjectId, sendError } = require('../utils/validate');
+
+const aiRateLimiter = createRateLimiter({
+  windowMs: 60 * 60 * 1000,
+  maxRequests: 20,
+  keyGenerator: (req) => req.user._id.toString(),
+  message: 'AI request limit reached. Try again in an hour.',
+});
 
 const getModelName = () => {
   const modelName = process.env.GEMINI_MODEL;
@@ -20,17 +28,40 @@ const getGenAI = () => {
 
 const handleGeminiError = (res, error) => {
   console.error('Gemini request failed:', error);
-  res.status(503).json({
+  return res.status(503).json({
     message: 'Gemini is unavailable. Check GEMINI_API_KEY and GEMINI_MODEL, then try again.',
   });
 };
 
-router.post('/analyze-project', protect, async (req, res) => {
+const generateJSON = async (prompt) => {
+  const genAI = getGenAI();
+  const model = genAI.getGenerativeModel({
+    model: getModelName(),
+    generationConfig: { responseMimeType: 'application/json' },
+  });
+  const result = await model.generateContent(prompt);
+  const text = result.response.text();
+  const jsonStr = text.replace(/```json\n?|\n?```/g, '').trim();
+  return JSON.parse(jsonStr);
+};
+
+const isStringList = (value) => (
+  Array.isArray(value) && value.every(item => typeof item === 'string')
+);
+
+router.post('/analyze-project', protect, aiRateLimiter, async (req, res) => {
   try {
+    if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+      return res.status(400).json({ message: 'A valid request body is required.' });
+    }
     const { title, description, skills, budgetMin, budgetMax, budgetType } = req.body;
-    
-    const genAI = getGenAI();
-    const model = genAI.getGenerativeModel({ model: getModelName() });
+    if (
+      typeof title !== 'string' || !title.trim()
+      || typeof description !== 'string' || !description.trim()
+      || !isStringList(skills)
+    ) {
+      return res.status(400).json({ message: 'Title and description must be strings, and skills must be an array of strings.' });
+    }
     
     const prompt = `Analyze this project listing for a freelancing platform.
     Title: ${title}
@@ -47,32 +78,49 @@ router.post('/analyze-project', protect, async (req, res) => {
     }
     Make sure you return ONLY valid JSON inside \`\`\`json block.`;
 
-    const result = await model.generateContent(prompt);
-    const text = result.response.text();
-    const jsonStr = text.replace(/```json\n?|\n?```/g, '').trim();
-    
-    const analysis = JSON.parse(jsonStr);
+    let analysis;
+    try {
+      analysis = await generateJSON(prompt);
+    } catch (error) {
+      return handleGeminiError(res, error);
+    }
     res.json(analysis);
   } catch (error) {
-    handleGeminiError(res, error);
+    sendError(res, error);
   }
 });
 
-router.post('/match-freelancers', protect, authorize('client'), async (req, res) => {
+router.post('/match-freelancers', protect, aiRateLimiter, authorize('client'), async (req, res) => {
   try {
+    if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+      return res.status(400).json({ message: 'A valid request body is required.' });
+    }
     const { projectId } = req.body;
     if (!isValidObjectId(projectId)) {
       return res.status(400).json({ message: 'Invalid project ID.' });
     }
     const project = await Project.findById(projectId);
     if (!project) return res.status(404).json({ message: 'Project not found' });
+    if (project.client.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'Not authorized to match freelancers for this project.' });
+    }
     
-    // In a real app we'd filter first, but for demo let's grab some available freelancers
-    const freelancers = await User.find({ role: 'freelancer' }).limit(10);
+    let freelancers = project.skills?.length
+      ? await User.find({ role: 'freelancer', skills: { $in: project.skills } })
+        .sort('-rating')
+        .limit(10)
+      : [];
+    if (freelancers.length < 10) {
+      const fallbackQuery = { role: 'freelancer' };
+      if (freelancers.length > 0) {
+        fallbackQuery._id = { $nin: freelancers.map(freelancer => freelancer._id) };
+      }
+      const fallback = await User.find(fallbackQuery)
+        .sort('-rating')
+        .limit(10 - freelancers.length);
+      freelancers = [...freelancers, ...fallback];
+    }
     if (freelancers.length === 0) return res.json({ matches: [] });
-    
-    const genAI = getGenAI();
-    const model = genAI.getGenerativeModel({ model: getModelName() });
     
     const freelancersData = freelancers.map(f => ({
       id: f._id,
@@ -84,7 +132,7 @@ router.post('/match-freelancers', protect, authorize('client'), async (req, res)
     
     const prompt = `Act as an AI matchmaker for a freelancing platform.
     Project: ${project.title} - ${project.description}
-    Required Skills: ${project.skills.join(', ')}
+    Required Skills: ${(project.skills || []).join(', ')}
     
     Available Freelancers Data: ${JSON.stringify(freelancersData)}
     
@@ -99,36 +147,49 @@ router.post('/match-freelancers', protect, authorize('client'), async (req, res)
     ]
     Make sure you return ONLY valid JSON inside \`\`\`json block.`;
 
-    const result = await model.generateContent(prompt);
-    const text = result.response.text();
-    const jsonStr = text.replace(/```json\n?|\n?```/g, '').trim();
-    
-    const aiResponse = JSON.parse(jsonStr);
-    
-    // Map backend data to frontend required shape
-    const matches = aiResponse.map(match => {
-      const f = freelancers.find(f => f._id.toString() === match.freelancerId);
-      if (!f) return null;
-      return {
-        freelancer: { _id: f._id, name: f.name, rating: f.rating, completedProjects: f.completedProjects },
-        compatibilityScore: match.compatibilityScore,
-        reasoning: match.reasoning,
-        strengths: match.strengths
-      };
-    }).filter(Boolean);
+    let matches;
+    try {
+      const aiResponse = await generateJSON(prompt);
+      if (!Array.isArray(aiResponse)) throw new Error('Gemini returned an invalid freelancer match response.');
+      matches = aiResponse.map(match => {
+        const freelancer = freelancers.find(f => f._id.toString() === match?.freelancerId);
+        if (!freelancer) return null;
+        return {
+          freelancer: {
+            _id: freelancer._id,
+            name: freelancer.name,
+            rating: freelancer.rating,
+            completedProjects: freelancer.completedProjects,
+          },
+          compatibilityScore: match.compatibilityScore,
+          reasoning: match.reasoning,
+          strengths: match.strengths,
+        };
+      }).filter(Boolean);
+    } catch (error) {
+      return handleGeminiError(res, error);
+    }
     
     res.json({ matches });
   } catch (error) {
-    handleGeminiError(res, error);
+    sendError(res, error);
   }
 });
 
-router.post('/improve-proposal', protect, authorize('freelancer'), async (req, res) => {
+router.post('/improve-proposal', protect, aiRateLimiter, authorize('freelancer'), async (req, res) => {
   try {
+    if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+      return res.status(400).json({ message: 'A valid request body is required.' });
+    }
     const { coverLetter, projectTitle, projectDescription, freelancerSkills } = req.body;
-    
-    const genAI = getGenAI();
-    const model = genAI.getGenerativeModel({ model: getModelName() });
+    if (
+      typeof coverLetter !== 'string' || !coverLetter.trim()
+      || typeof projectTitle !== 'string' || !projectTitle.trim()
+      || typeof projectDescription !== 'string' || !projectDescription.trim()
+      || !isStringList(freelancerSkills)
+    ) {
+      return res.status(400).json({ message: 'Cover letter, project title, and description must be strings, and freelancer skills must be an array of strings.' });
+    }
     
     const prompt = `Review and improve this freelancer proposal cover letter.
     Project: ${projectTitle} - ${projectDescription}
@@ -145,26 +206,25 @@ router.post('/improve-proposal', protect, authorize('freelancer'), async (req, r
     }
     Make sure you return ONLY valid JSON inside \`\`\`json block.`;
 
-    const result = await model.generateContent(prompt);
-    const text = result.response.text();
-    const jsonStr = text.replace(/```json\n?|\n?```/g, '').trim();
-    
-    const improved = JSON.parse(jsonStr);
+    let improved;
+    try {
+      improved = await generateJSON(prompt);
+    } catch (error) {
+      return handleGeminiError(res, error);
+    }
     res.json(improved);
   } catch (error) {
-    handleGeminiError(res, error);
+    sendError(res, error);
   }
 });
 
-router.post('/recommend-jobs', protect, authorize('freelancer'), async (req, res) => {
+router.post('/recommend-jobs', protect, aiRateLimiter, authorize('freelancer'), async (req, res) => {
   try {
     const user = await User.findById(req.user._id);
-    const projects = await Project.find({ status: 'open' }).limit(20);
+    if (!user) return res.status(404).json({ message: 'User not found.' });
+    const projects = await Project.find({ status: 'open', visibility: 'public' }).limit(20);
     
     if (projects.length === 0) return res.json({ recommendations: [] });
-    
-    const genAI = getGenAI();
-    const model = genAI.getGenerativeModel({ model: getModelName() });
     
     const projectsData = projects.map(p => ({
       id: p._id,
@@ -175,7 +235,7 @@ router.post('/recommend-jobs', protect, authorize('freelancer'), async (req, res
     }));
     
     const prompt = `Recommend projects for a freelancer.
-    Freelancer Skills: ${user.skills.join(', ')}
+    Freelancer Skills: ${(user.skills || []).join(', ')}
     Freelancer Hourly Rate: ₹${user.hourlyRate || 0}
     
     Available Projects: ${JSON.stringify(projectsData)}
@@ -192,28 +252,29 @@ router.post('/recommend-jobs', protect, authorize('freelancer'), async (req, res
       }
     ]`;
 
-    const result = await model.generateContent(prompt);
-    const text = result.response.text();
-    const jsonStr = text.replace(/```json\n?|\n?```/g, '').trim();
-    
-    const aiResponse = JSON.parse(jsonStr);
-    
-    const recommendations = aiResponse.map(match => {
-      const p = projects.find(p => p._id.toString() === match.projectId);
-      if (!p) return null;
-      return {
-        project: p,
-        matchScore: match.matchScore,
-        reasoning: match.reasoning,
-        whyGoodFit: match.whyGoodFit,
-        suggestedBid: match.suggestedBid,
-        coverLetterTip: match.coverLetterTip
-      };
-    }).filter(Boolean);
+    let recommendations;
+    try {
+      const aiResponse = await generateJSON(prompt);
+      if (!Array.isArray(aiResponse)) throw new Error('Gemini returned an invalid project recommendation response.');
+      recommendations = aiResponse.map(match => {
+        const project = projects.find(p => p._id.toString() === match?.projectId);
+        if (!project) return null;
+        return {
+          project,
+          matchScore: match.matchScore,
+          reasoning: match.reasoning,
+          whyGoodFit: match.whyGoodFit,
+          suggestedBid: match.suggestedBid,
+          coverLetterTip: match.coverLetterTip,
+        };
+      }).filter(Boolean);
+    } catch (error) {
+      return handleGeminiError(res, error);
+    }
     
     res.json({ recommendations });
   } catch (error) {
-    handleGeminiError(res, error);
+    sendError(res, error);
   }
 });
 

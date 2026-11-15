@@ -7,6 +7,18 @@ import { io } from 'socket.io-client';
 
 let socket;
 
+const mergeMessages = (messages, additions) => {
+  const seen = new Set();
+  return [...messages, ...additions]
+    .filter((message) => {
+      if (!message?._id) return true;
+      if (seen.has(message._id)) return false;
+      seen.add(message._id);
+      return true;
+    })
+    .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+};
+
 export default function Messages() {
   const { user } = useAuth();
   const { conversationId } = useParams();
@@ -25,12 +37,22 @@ export default function Messages() {
     const socketUrl = process.env.REACT_APP_SOCKET_URL
       || API.defaults.baseURL.replace(/\/api\/?$/, '')
       || window.location.origin;
-    socket = io(socketUrl, {
+    const currentSocket = io(socketUrl, {
       transports: ['websocket'],
       auth: { token: localStorage.getItem('flex_token') },
     });
-    socket.emit('join', user._id);
-    return () => socket.disconnect();
+    socket = currentSocket;
+    currentSocket.emit('join', user._id);
+    const handleConnectError = (error) => {
+      console.error('Socket connection failed:', error);
+      toast.error('Chat connection failed. Please try again.');
+    };
+    currentSocket.on('connect_error', handleConnectError);
+    return () => {
+      currentSocket.off('connect_error', handleConnectError);
+      currentSocket.disconnect();
+      if (socket === currentSocket) socket = null;
+    };
   }, [user._id]);
 
   useEffect(() => {
@@ -53,16 +75,19 @@ export default function Messages() {
     const fetchMsgs = async () => {
       try {
         const { data } = await API.get(`/messages/${activeConv._id}`);
-        setMessages(data.messages);
+        setMessages(previous => mergeMessages(data.messages, previous));
       } catch (err) { console.error(err); }
     };
     fetchMsgs();
-    socket.emit('join_conversation', activeConv._id);
-    const handleMsg = (msg) => setMessages(prev => [...prev, msg]);
+    socket?.emit('join_conversation', activeConv._id);
+    const handleMsg = (msg) => setMessages(prev => mergeMessages(prev, [msg]));
     const handleTyping = (data) => { if (data.userId !== user._id) setTyping(data.typing); };
-    socket.on('receive_message', handleMsg);
-    socket.on('user_typing', handleTyping);
-    return () => { socket.off('receive_message', handleMsg); socket.off('user_typing', handleTyping); };
+    socket?.on('receive_message', handleMsg);
+    socket?.on('user_typing', handleTyping);
+    return () => {
+      socket?.off('receive_message', handleMsg);
+      socket?.off('user_typing', handleTyping);
+    };
   }, [activeConv, user._id]);
 
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
@@ -73,7 +98,8 @@ export default function Messages() {
     if (newMsg.length > 5000) { toast.error('Message too long (max 5000 chars)'); return; }
     setSending(true);
     try {
-      await API.post(`/messages/${activeConv._id}`, { content: newMsg.trim() });
+      const { data } = await API.post(`/messages/${activeConv._id}`, { content: newMsg.trim() });
+      setMessages(prev => mergeMessages(prev, [data.message]));
       setNewMsg('');
     } catch (err) { toast.error(err.response?.data?.message || 'Failed to send'); }
     finally { setSending(false); }
@@ -82,15 +108,15 @@ export default function Messages() {
   const handleTypingInput = (e) => {
     setNewMsg(e.target.value);
     if (activeConv) {
-      socket.emit('typing', { conversationId: activeConv._id, userId: user._id, typing: true });
+      socket?.emit('typing', { conversationId: activeConv._id, userId: user._id, typing: true });
       clearTimeout(typingTimeout.current);
       typingTimeout.current = setTimeout(() => {
-        socket.emit('typing', { conversationId: activeConv._id, userId: user._id, typing: false });
+        socket?.emit('typing', { conversationId: activeConv._id, userId: user._id, typing: false });
       }, 2000);
     }
   };
 
-  const getOther = (conv) => conv?.participants?.find(p => p._id !== user._id);
+  const getOther = (conv) => conv?.participants?.find(participant => participant?._id !== user?._id);
 
   return (
     <div className="page" style={{ paddingTop: 0 }}>

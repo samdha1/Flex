@@ -6,9 +6,12 @@ const reviewSchema = new mongoose.Schema({
   reviewee: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   
   rating: { type: Number, required: true, min: 1, max: 5 },
-  comment: { type: String, required: true },
+  comment: { type: String, required: true, maxlength: 2000 },
   
   createdAt: { type: Date, default: Date.now }
 });
+
+reviewSchema.index({ project: 1, reviewer: 1 }, { unique: true });
+reviewSchema.index({ reviewee: 1 });
 
 module.exports = mongoose.model('Review', reviewSchema);

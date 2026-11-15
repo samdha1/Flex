@@ -7,4 +7,6 @@ const conversationSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
+conversationSchema.index({ participants: 1, lastMessageAt: -1 });
+
 module.exports = mongoose.model('Conversation', conversationSchema);

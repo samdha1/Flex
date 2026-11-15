@@ -15,5 +15,6 @@ const proposalSchema = new mongoose.Schema({
 
 // A freelancer can only submit one proposal per project
 proposalSchema.index({ project: 1, freelancer: 1 }, { unique: true });
+proposalSchema.index({ freelancer: 1 });
 
 module.exports = mongoose.model('Proposal', proposalSchema);
