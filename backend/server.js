@@ -86,9 +86,13 @@ io.on('connection', (socket) => {
 mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/flex', {
   useNewUrlParser: true,
   useUnifiedTopology: true,
+  serverSelectionTimeoutMS: 10000,
 })
   .then(() => console.log('MongoDB connected'))
-  .catch(err => console.error('MongoDB connection error:', err));
+  .catch(err => console.error(
+    'MongoDB connection failed. Check MONGODB_URI, the database user/password (URL-encode special characters), and Atlas Network Access (allow 0.0.0.0/0).',
+    err,
+  ));
 
 // Routes
 app.use('/api/auth', require('./routes/auth'));
@@ -101,10 +105,16 @@ app.use('/api/reviews', require('./routes/reviews'));
 app.use('/api/ai', require('./routes/ai'));
 
 app.get('/health', (req, res) => {
-  if (mongoose.connection.readyState !== 1) {
-    return res.status(503).json({ status: 'unavailable', database: 'disconnected' });
-  }
-  res.json({ status: 'ok' });
+  const connected = mongoose.connection.readyState === 1;
+  res.json({ status: 'ok', database: connected ? 'connected' : 'disconnected' });
+});
+
+app.get('/health/db', (req, res) => {
+  const connected = mongoose.connection.readyState === 1;
+  res.status(connected ? 200 : 503).json({
+    status: connected ? 'ok' : 'unavailable',
+    database: connected ? 'connected' : 'disconnected',
+  });
 });
 
 if (fs.existsSync(frontendIndexPath)) {

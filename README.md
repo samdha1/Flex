@@ -19,7 +19,7 @@ Some features need credentials from external services. See [Environment variable
 - **Frontend:** React 18, React Router, Axios
 - **Backend:** Node.js, Express, Socket.IO
 - **Database:** MongoDB with Mongoose
-- **Integrations:** Google Gemini, Razorpay, SMTP email
+- **Integrations:** Google Gemini, Razorpay, Brevo transactional email API
 
 ## Repository layout
 
@@ -76,6 +76,8 @@ Backend variables are documented with safe placeholders in [`backend/.env.exampl
 | --- | --- | --- |
 | `PORT` | Hosting provides it | HTTP server port; defaults to `5000` locally. |
 | `NODE_ENV` | No | Set to `production` on deployment. |
+| `NODE_VERSION` | Render | Node.js version used for the service; set to `22`. |
+| `GENERATE_SOURCEMAP` | Render | Set to `false` to reduce frontend build memory usage. |
 | `MONGODB_URI` | Yes in production | MongoDB connection string. |
 | `JWT_SECRET` | Yes in production | Secret used to sign and verify login tokens. Use a unique, strong value. |
 | `JWT_EXPIRES_IN` | No | Token lifetime; defaults to `7d`. |
@@ -84,9 +86,8 @@ Backend variables are documented with safe placeholders in [`backend/.env.exampl
 | `GEMINI_API_KEY` | For AI recommendations | Google Gemini API key. |
 | `RAZORPAY_KEY_ID` | For payments | Razorpay key ID. |
 | `RAZORPAY_KEY_SECRET` | For payments | Razorpay secret; keep it private. |
-| `SMTP_HOST`, `SMTP_PORT` | For email OTP | SMTP server address and port. |
-| `SMTP_USER`, `SMTP_PASS` | For email OTP | SMTP login credentials. |
-| `FROM_EMAIL` | For email OTP | Sender email address. |
+| `EMAIL_API_KEY` | For email OTP | Brevo transactional email API key. |
+| `FROM_EMAIL` | For email OTP | Verified sender email address configured in Brevo. |
 
 Frontend build-time variables:
 
@@ -94,7 +95,7 @@ Frontend build-time variables:
 | --- | --- |
 | `REACT_APP_API_URL` | API base URL, including `/api`. Use `/api` when frontend and backend are served by the same domain. |
 | `REACT_APP_SOCKET_URL` | Optional Socket.IO server origin. If omitted, chat derives it from `REACT_APP_API_URL` or the current page origin. |
-| `REACT_APP_RAZORPAY_KEY_ID` | Optional public Razorpay key ID for the payment UI. |
+| `REACT_APP_RAZORPAY_KEY_ID` | Public Razorpay key ID for the payment UI. |
 
 For Create React App, frontend variables must be present when the frontend is built; changing hosting environment values requires a new frontend build/deployment.
 
@@ -104,9 +105,9 @@ The [`render.yaml`](./render.yaml) Blueprint defines a **single Node web service
 
 1. Push the repository to GitHub.
 2. In Render, choose **New → Blueprint**, select this repository, and apply the Blueprint.
-3. In the `flex` service's environment settings, set `MONGODB_URI` to your production MongoDB connection string and `JWT_SECRET` to a strong, unique secret.
+3. In the `flex` service's environment settings, set `MONGODB_URI` to your production MongoDB connection string and `JWT_SECRET` to a strong, unique secret. Render prompts for values marked `sync: false` in `render.yaml`; fill in only the integrations you use, including Brevo's `EMAIL_API_KEY` and verified `FROM_EMAIL` for email OTP.
 4. The Blueprint sets `REACT_APP_API_URL=/api`, so frontend API calls use the same domain. Chat connects to that domain over WebSocket as well.
 5. Set `CLIENT_URL` to the exact public origin of the combined service (scheme and hostname only, no path or trailing slash), for example `https://flex.onrender.com`. Render will ask for it when you apply the Blueprint. If you use multiple frontend origins, add them as a comma-separated `CLIENT_URLS` environment variable.
-6. Add any integration credentials you use (Gemini, Razorpay, SMTP) to the same Render service's environment settings. Keep secrets out of `render.yaml` and GitHub.
+6. Add any integration credentials you use (`GEMINI_API_KEY`, `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `REACT_APP_RAZORPAY_KEY_ID`, `EMAIL_API_KEY`, and `FROM_EMAIL`) to the same Render service's environment settings. Keep secrets out of `render.yaml` and GitHub.
 
-The Render build installs dependencies from both lockfiles and builds `frontend/build`. Production startup checks that build exists. The service root serves the Flex app, `/api/...` serves backend routes, and `/health` returns `{"status":"ok"}` after MongoDB connects. If MongoDB is unavailable, `/health` returns HTTP `503`.
+The Render Blueprint keeps the frontend and backend in one Node web service: it installs dependencies from both lockfiles, builds `frontend/build` with `GENERATE_SOURCEMAP=false`, and starts Express, which serves the Flex app, `/api/...` routes, and Socket.IO on the same domain. `NODE_VERSION=22` provides the built-in `fetch` used for Brevo's HTTPS email API. `/health` always returns HTTP `200` with the process status and MongoDB connection state so Render can monitor the running service; `/health/db` returns HTTP `503` until MongoDB connects and HTTP `200` afterward.

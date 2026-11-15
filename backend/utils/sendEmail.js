@@ -1,29 +1,33 @@
-const nodemailer = require('nodemailer');
+const sendEmail = async ({ email, subject, message, html }) => {
+  if (!process.env.EMAIL_API_KEY) {
+    throw new Error('EMAIL_API_KEY is required to send email through Brevo.');
+  }
+  if (!process.env.FROM_EMAIL) {
+    throw new Error('FROM_EMAIL is required to send email through Brevo.');
+  }
 
-const sendEmail = async (options) => {
-  // Create a transporter using your email credentials
-  const transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: process.env.SMTP_PORT,
-    secure: false, // true for 465, false for other ports
-    auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS, // Needs an App Password if using Gmail
+  const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: {
+      accept: 'application/json',
+      'api-key': process.env.EMAIL_API_KEY,
+      'content-type': 'application/json',
     },
+    body: JSON.stringify({
+      sender: { name: 'Flex', email: process.env.FROM_EMAIL },
+      to: [{ email }],
+      subject,
+      textContent: message,
+      htmlContent: html,
+    }),
   });
 
-  // Define email options
-  const mailOptions = {
-    from: `${process.env.FROM_NAME || 'Flex'} <${process.env.FROM_EMAIL}>`,
-    to: options.email,
-    subject: options.subject,
-    text: options.message,
-    html: options.html,
-  };
-
-  // Send the email
-  const info = await transporter.sendMail(mailOptions);
-  console.log('Message sent: %s', info.messageId);
+  if (!response.ok) {
+    const responseBody = await response.text();
+    throw new Error(
+      `Brevo email API request failed with HTTP ${response.status}: ${responseBody}`,
+    );
+  }
 };
 
 module.exports = sendEmail;
