@@ -5,18 +5,31 @@ const User = require('../models/User');
 const Project = require('../models/Project');
 const { protect, authorize } = require('../middleware/authMiddleware');
 
+const getModelName = () => {
+  const modelName = process.env.GEMINI_MODEL;
+  if (!modelName) throw new Error('GEMINI_MODEL is not defined in environment variables.');
+  return modelName;
+};
+
 const getGenAI = () => {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY is not defined in environment variables');
   return new GoogleGenerativeAI(apiKey);
 };
 
-router.post('/analyze-project', async (req, res) => {
+const handleGeminiError = (res, error) => {
+  console.error('Gemini request failed:', error);
+  res.status(503).json({
+    message: 'Gemini is unavailable. Check GEMINI_API_KEY and GEMINI_MODEL, then try again.',
+  });
+};
+
+router.post('/analyze-project', protect, async (req, res) => {
   try {
     const { title, description, skills, budgetMin, budgetMax, budgetType } = req.body;
     
     const genAI = getGenAI();
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    const model = genAI.getGenerativeModel({ model: getModelName() });
     
     const prompt = `Analyze this project listing for a freelancing platform.
     Title: ${title}
@@ -40,14 +53,7 @@ router.post('/analyze-project', async (req, res) => {
     const analysis = JSON.parse(jsonStr);
     res.json(analysis);
   } catch (error) {
-    console.error('AI Error:', error);
-    // Send a mockup fallback for demo purposes if API key is not valid
-    res.json({
-      quality: 85,
-      complexityLevel: 'Medium',
-      budgetAssessment: 'Fair',
-      suggestions: ['Add more specific deliverables', 'Mention expected communication frequency']
-    });
+    handleGeminiError(res, error);
   }
 });
 
@@ -62,7 +68,7 @@ router.post('/match-freelancers', protect, authorize('client'), async (req, res)
     if (freelancers.length === 0) return res.json({ matches: [] });
     
     const genAI = getGenAI();
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    const model = genAI.getGenerativeModel({ model: getModelName() });
     
     const freelancersData = freelancers.map(f => ({
       id: f._id,
@@ -109,9 +115,7 @@ router.post('/match-freelancers', protect, authorize('client'), async (req, res)
     
     res.json({ matches });
   } catch (error) {
-    console.error('AI Error:', error);
-    // Mock fallback
-    res.json({ matches: [] });
+    handleGeminiError(res, error);
   }
 });
 
@@ -120,7 +124,7 @@ router.post('/improve-proposal', protect, authorize('freelancer'), async (req, r
     const { coverLetter, projectTitle, projectDescription, freelancerSkills } = req.body;
     
     const genAI = getGenAI();
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    const model = genAI.getGenerativeModel({ model: getModelName() });
     
     const prompt = `Review and improve this freelancer proposal cover letter.
     Project: ${projectTitle} - ${projectDescription}
@@ -144,12 +148,7 @@ router.post('/improve-proposal', protect, authorize('freelancer'), async (req, r
     const improved = JSON.parse(jsonStr);
     res.json(improved);
   } catch (error) {
-    console.error('AI Error:', error);
-    res.json({
-      score: 75,
-      improvedVersion: req.body.coverLetter + "\n\n(Note: The AI improvement service is currently unavailable. Please polish your proposal manually.)",
-      feedback: ["Highlight specific relevant projects you've worked on."]
-    });
+    handleGeminiError(res, error);
   }
 });
 
@@ -161,7 +160,7 @@ router.post('/recommend-jobs', protect, authorize('freelancer'), async (req, res
     if (projects.length === 0) return res.json({ recommendations: [] });
     
     const genAI = getGenAI();
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    const model = genAI.getGenerativeModel({ model: getModelName() });
     
     const projectsData = projects.map(p => ({
       id: p._id,
@@ -210,8 +209,7 @@ router.post('/recommend-jobs', protect, authorize('freelancer'), async (req, res
     
     res.json({ recommendations });
   } catch (error) {
-    console.error('AI Error:', error);
-    res.json({ recommendations: [] });
+    handleGeminiError(res, error);
   }
 });
 

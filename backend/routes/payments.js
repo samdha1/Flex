@@ -51,7 +51,14 @@ router.post('/razorpay/verify', protect, async (req, res) => {
     hmac.update(razorpay_order_id + "|" + razorpay_payment_id);
     const expectedSignature = hmac.digest('hex');
     
-    if (expectedSignature !== razorpay_signature) {
+    const expectedSignatureBuffer = Buffer.from(expectedSignature);
+    const providedSignatureBuffer = Buffer.from(
+      typeof razorpay_signature === 'string' ? razorpay_signature : '',
+    );
+    if (
+      expectedSignatureBuffer.length !== providedSignatureBuffer.length
+      || !crypto.timingSafeEqual(expectedSignatureBuffer, providedSignatureBuffer)
+    ) {
       return res.status(400).json({ message: 'Payment verification failed (signature mismatch)' });
     }
     

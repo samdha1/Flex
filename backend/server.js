@@ -6,12 +6,19 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const { Server } = require('socket.io');
+const jwt = require('jsonwebtoken');
+const User = require('./models/User');
+const Conversation = require('./models/Conversation');
 
 // Load env vars
 dotenv.config();
 
+if (!process.env.JWT_SECRET) {
+  throw new Error('JWT_SECRET must be set in all environments before starting the server.');
+}
+
 if (process.env.NODE_ENV === 'production') {
-  const missingEnvVars = ['MONGODB_URI', 'JWT_SECRET'].filter((key) => !process.env[key]);
+  const missingEnvVars = ['MONGODB_URI'].filter((key) => !process.env[key]);
   if (missingEnvVars.length) {
     throw new Error(`Missing required production environment variables: ${missingEnvVars.join(', ')}`);
   }
@@ -36,6 +43,7 @@ const corsOrigin = (origin, callback) => {
 };
 
 const app = express();
+app.set('trust proxy', 1);
 const server = http.createServer(app);
 
 const io = new Server(server, {
@@ -48,6 +56,27 @@ const io = new Server(server, {
 });
 
 global.io = io;
+
+io.use(async (socket, next) => {
+  const token = socket.handshake.auth && socket.handshake.auth.token;
+  if (typeof token !== 'string' || !token) {
+    return next(new Error('Authentication required.'));
+  }
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    if (typeof decoded !== 'object' || !decoded.id) {
+      return next(new Error('Invalid authentication token.'));
+    }
+
+    const user = await User.findById(decoded.id).select('_id');
+    if (!user) return next(new Error('Authenticated user not found.'));
+    socket.data.userId = user._id.toString();
+    next();
+  } catch (error) {
+    next(new Error('Invalid authentication token.'));
+  }
+});
 
 // Middleware
 // Express CORS
@@ -62,19 +91,36 @@ app.use(express.urlencoded({ extended: true }));
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
 
-  socket.on('join', (userId) => {
-    socket.join(userId);
-    console.log(`User ${userId} joined their personal room`);
+  socket.on('join', () => {
+    socket.join(socket.data.userId);
+    console.log(`User ${socket.data.userId} joined their personal room`);
   });
 
-  socket.on('join_conversation', (conversationId) => {
-    socket.join(conversationId);
-    console.log(`User joined conversation ${conversationId}`);
+  socket.on('join_conversation', async (conversationId) => {
+    try {
+      const conversation = await Conversation.findById(conversationId).select('participants');
+      const isParticipant = conversation
+        && conversation.participants.some(
+          (participant) => participant.toString() === socket.data.userId,
+        );
+      if (!isParticipant) return;
+
+      socket.join(conversationId);
+      console.log(`User ${socket.data.userId} joined conversation ${conversationId}`);
+    } catch (error) {
+      console.error('Could not authorize conversation socket room:', error);
+    }
   });
 
   socket.on('typing', (data) => {
-    // data: { conversationId, userId, typing }
-    socket.to(data.conversationId).emit('user_typing', data);
+    if (!data || typeof data.conversationId !== 'string' || !socket.rooms.has(data.conversationId)) {
+      return;
+    }
+    socket.to(data.conversationId).emit('user_typing', {
+      conversationId: data.conversationId,
+      userId: socket.data.userId,
+      typing: Boolean(data.typing),
+    });
   });
 
   socket.on('disconnect', () => {

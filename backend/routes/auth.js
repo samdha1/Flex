@@ -6,16 +6,85 @@ const User = require('../models/User');
 const OTP = require('../models/OTP');
 const { protect } = require('../middleware/authMiddleware');
 
+const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
+const RATE_LIMIT_MAX_REQUESTS = 10;
+
+const createRateLimiter = () => {
+  const requestsByIp = new Map();
+  let lastCleanup = Date.now();
+
+  return (req, res, next) => {
+    const now = Date.now();
+    if (now - lastCleanup >= RATE_LIMIT_WINDOW_MS) {
+      for (const [ip, entry] of requestsByIp) {
+        if (entry.resetAt <= now) requestsByIp.delete(ip);
+      }
+      lastCleanup = now;
+    }
+
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
+    let entry = requestsByIp.get(ip);
+    if (!entry || entry.resetAt <= now) {
+      entry = { count: 0, resetAt: now + RATE_LIMIT_WINDOW_MS };
+      requestsByIp.set(ip, entry);
+    }
+
+    if (entry.count >= RATE_LIMIT_MAX_REQUESTS) {
+      res.set('Retry-After', Math.ceil((entry.resetAt - now) / 1000).toString());
+      return res.status(429).json({
+        message: 'Too many requests. Please try again after 15 minutes.',
+      });
+    }
+
+    entry.count += 1;
+    next();
+  };
+};
+
+const sendOtpRateLimiter = createRateLimiter();
+const loginRateLimiter = createRateLimiter();
+
 const generateToken = (id) => {
-  return jwt.sign({ id }, process.env.JWT_SECRET || 'your_super_secret_jwt_key_change_in_production', {
+  return jwt.sign({ id }, process.env.JWT_SECRET, {
     expiresIn: process.env.JWT_EXPIRES_IN || '7d',
   });
 };
 
-router.post('/send-otp', async (req, res) => {
+const verifyOtp = async (email, otp) => {
+  const record = await OTP.findOne({ email });
+  if (!record) {
+    return { valid: false, status: 400, message: 'Invalid or expired OTP' };
+  }
+
+  if (record.code !== String(otp)) {
+    const updatedRecord = await OTP.findByIdAndUpdate(
+      record._id,
+      { $inc: { attempts: 1 } },
+      { new: true },
+    );
+
+    if (updatedRecord && updatedRecord.attempts >= 5) {
+      await OTP.deleteOne({ _id: updatedRecord._id });
+      return {
+        valid: false,
+        status: 429,
+        message: 'Too many incorrect OTP attempts. Request a new code.',
+      };
+    }
+    return { valid: false, status: 400, message: 'Invalid or expired OTP' };
+  }
+
+  const consumedRecord = await OTP.findOneAndDelete({ _id: record._id, code: String(otp) });
+  if (!consumedRecord) {
+    return { valid: false, status: 400, message: 'Invalid or expired OTP' };
+  }
+  return { valid: true };
+};
+
+router.post('/send-otp', sendOtpRateLimiter, async (req, res) => {
   try {
     const { email } = req.body;
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const code = crypto.randomInt(100000, 1000000).toString();
 
     await OTP.deleteMany({ email });
     await OTP.create({ email, code });
@@ -32,7 +101,7 @@ router.post('/send-otp', async (req, res) => {
       });
       emailSent = true;
     } catch (err) {
-      console.error('Email could not be sent (check SMTP settings):', err.message);
+      console.error('Email could not be sent (check Brevo API settings):', err.message);
     }
 
     if (!emailSent) {
@@ -48,12 +117,17 @@ router.post('/send-otp', async (req, res) => {
 router.post('/verify-otp', async (req, res) => {
   try {
     const { email, otp } = req.body;
-    const record = await OTP.findOne({ email, code: otp });
-
-    if (!record) return res.status(400).json({ message: 'Invalid or expired OTP' });
+    const verification = await verifyOtp(email, otp);
+    if (!verification.valid) {
+      return res.status(verification.status).json({ message: verification.message });
+    }
 
     // Create a temporary verification token to allow registration
-    const otpToken = crypto.randomBytes(20).toString('hex');
+    const otpToken = jwt.sign(
+      { email, purpose: 'registration' },
+      process.env.JWT_SECRET,
+      { expiresIn: '10m' },
+    );
 
     res.json({ verified: true, otpToken });
   } catch (error) {
@@ -66,6 +140,20 @@ router.post('/register', async (req, res) => {
     const { name, email, password, role, otpToken } = req.body;
 
     if (!otpToken) return res.status(400).json({ message: 'OTP verification required' });
+
+    let otpClaims;
+    try {
+      otpClaims = jwt.verify(otpToken, process.env.JWT_SECRET);
+    } catch (error) {
+      return res.status(400).json({ message: 'OTP verification required' });
+    }
+    if (
+      typeof otpClaims !== 'object'
+      || otpClaims.purpose !== 'registration'
+      || otpClaims.email !== email
+    ) {
+      return res.status(400).json({ message: 'OTP verification required' });
+    }
 
     const userExists = await User.findOne({ email });
     if (userExists) return res.status(400).json({ message: 'User already exists' });
@@ -80,7 +168,7 @@ router.post('/register', async (req, res) => {
   }
 });
 
-router.post('/login', async (req, res) => {
+router.post('/login', loginRateLimiter, async (req, res) => {
   try {
     const { email, password, otp } = req.body;
     const user = await User.findOne({ email });
@@ -88,7 +176,7 @@ router.post('/login', async (req, res) => {
     if (user && (await user.matchPassword(password))) {
       // If no OTP in request, generate one and ask for it
       if (!otp) {
-        const code = Math.floor(100000 + Math.random() * 900000).toString();
+        const code = crypto.randomInt(100000, 1000000).toString();
         await OTP.deleteMany({ email });
         await OTP.create({ email, code });
 
@@ -103,7 +191,7 @@ router.post('/login', async (req, res) => {
           });
           emailSent = true;
         } catch (err) {
-          console.error('Email could not be sent (check SMTP settings):', err.message);
+          console.error('Email could not be sent (check Brevo API settings):', err.message);
         }
 
         if (!emailSent) {
@@ -114,8 +202,10 @@ router.post('/login', async (req, res) => {
       }
 
       // If OTP provided, verify it
-      const record = await OTP.findOne({ email, code: otp });
-      if (!record) return res.status(400).json({ message: 'Invalid or expired OTP' });
+      const verification = await verifyOtp(email, otp);
+      if (!verification.valid) {
+        return res.status(verification.status).json({ message: verification.message });
+      }
 
       // OTP valid, successful login
       res.json({

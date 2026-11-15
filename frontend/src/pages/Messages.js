@@ -25,7 +25,10 @@ export default function Messages() {
     const socketUrl = process.env.REACT_APP_SOCKET_URL
       || API.defaults.baseURL.replace(/\/api\/?$/, '')
       || window.location.origin;
-    socket = io(socketUrl, { transports: ['websocket'] });
+    socket = io(socketUrl, {
+      transports: ['websocket'],
+      auth: { token: localStorage.getItem('flex_token') },
+    });
     socket.emit('join', user._id);
     return () => socket.disconnect();
   }, [user._id]);
