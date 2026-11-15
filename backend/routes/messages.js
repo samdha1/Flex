@@ -3,10 +3,17 @@ const router = express.Router();
 const Conversation = require('../models/Conversation');
 const Message = require('../models/Message');
 const { protect } = require('../middleware/authMiddleware');
+const { isValidObjectId, sendError } = require('../utils/validate');
 
 router.post('/conversations', protect, async (req, res) => {
   try {
     const { recipientId, projectId } = req.body;
+    if (!isValidObjectId(recipientId)) {
+      return res.status(400).json({ message: 'Invalid recipient ID.' });
+    }
+    if (projectId !== undefined && !isValidObjectId(projectId)) {
+      return res.status(400).json({ message: 'Invalid project ID.' });
+    }
     
     if (recipientId === req.user._id.toString()) {
       return res.status(400).json({ message: 'Cannot message yourself' });
@@ -26,7 +33,7 @@ router.post('/conversations', protect, async (req, res) => {
     
     res.json({ conversation });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    sendError(res, error);
   }
 });
 
@@ -39,12 +46,15 @@ router.get('/conversations', protect, async (req, res) => {
       
     res.json({ conversations });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    sendError(res, error);
   }
 });
 
 router.get('/:conversationId', protect, async (req, res) => {
   try {
+    if (!isValidObjectId(req.params.conversationId)) {
+      return res.status(400).json({ message: 'Invalid conversation ID.' });
+    }
     const conversation = await Conversation.findById(req.params.conversationId);
     if (!conversation || !conversation.participants.includes(req.user._id)) {
       return res.status(404).json({ message: 'Conversation not found' });
@@ -56,12 +66,15 @@ router.get('/:conversationId', protect, async (req, res) => {
       
     res.json({ messages });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    sendError(res, error);
   }
 });
 
 router.post('/:conversationId', protect, async (req, res) => {
   try {
+    if (!isValidObjectId(req.params.conversationId)) {
+      return res.status(400).json({ message: 'Invalid conversation ID.' });
+    }
     const { content } = req.body;
     const conversation = await Conversation.findById(req.params.conversationId);
     
@@ -88,7 +101,7 @@ router.post('/:conversationId', protect, async (req, res) => {
     
     res.status(201).json({ message });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    sendError(res, error);
   }
 });
 

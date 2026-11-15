@@ -9,6 +9,7 @@ const { Server } = require('socket.io');
 const jwt = require('jsonwebtoken');
 const User = require('./models/User');
 const Conversation = require('./models/Conversation');
+const { isValidObjectId } = require('./utils/validate');
 
 // Load env vars
 dotenv.config();
@@ -43,6 +44,7 @@ const corsOrigin = (origin, callback) => {
 };
 
 const app = express();
+app.disable('x-powered-by');
 app.set('trust proxy', 1);
 const server = http.createServer(app);
 
@@ -64,8 +66,13 @@ io.use(async (socket, next) => {
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    if (typeof decoded !== 'object' || !decoded.id) {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] });
+    if (
+      typeof decoded !== 'object'
+      || decoded === null
+      || decoded.purpose !== undefined
+      || !isValidObjectId(decoded.id)
+    ) {
       return next(new Error('Invalid authentication token.'));
     }
 
@@ -97,6 +104,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('join_conversation', async (conversationId) => {
+    if (!isValidObjectId(conversationId)) return;
     try {
       const conversation = await Conversation.findById(conversationId).select('participants');
       const isParticipant = conversation
@@ -163,6 +171,15 @@ app.get('/health/db', (req, res) => {
   });
 });
 
+// TODO: Remove this route after verifying the client IP reported by Render.
+app.get('/health/ip', (req, res) => {
+  res.json({ ip: req.ip });
+});
+
+app.use('/api', (req, res) => {
+  res.status(404).json({ message: 'API route not found' });
+});
+
 if (fs.existsSync(frontendIndexPath)) {
   app.use(express.static(frontendBuildPath));
   app.get('*', (req, res, next) => {
@@ -178,8 +195,12 @@ if (fs.existsSync(frontendIndexPath)) {
 }
 
 app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ message: err.message || 'Something went wrong on the server' });
+  console.error(err);
+  const status = err.status || err.statusCode || 500;
+  const message = status >= 500 && process.env.NODE_ENV === 'production'
+    ? 'Internal server error'
+    : err.message || 'Something went wrong on the server';
+  res.status(status).json({ message });
 });
 
 const PORT = process.env.PORT || 5000;

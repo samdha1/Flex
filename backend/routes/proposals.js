@@ -3,10 +3,14 @@ const router = express.Router();
 const Proposal = require('../models/Proposal');
 const Project = require('../models/Project');
 const { protect, authorize } = require('../middleware/authMiddleware');
+const { isValidObjectId, sendError } = require('../utils/validate');
 
 router.post('/', protect, authorize('freelancer'), async (req, res) => {
   try {
     const { projectId, coverLetter, bidAmount, deliveryTime } = req.body;
+    if (!isValidObjectId(projectId)) {
+      return res.status(400).json({ message: 'Invalid project ID.' });
+    }
     
     const project = await Project.findById(projectId);
     if (!project) return res.status(404).json({ message: 'Project not found' });
@@ -28,7 +32,7 @@ router.post('/', protect, authorize('freelancer'), async (req, res) => {
     
     res.status(201).json({ proposal });
   } catch (error) {
-    res.status(400).json({ message: error.message });
+    sendError(res, error);
   }
 });
 
@@ -39,13 +43,17 @@ router.get('/my', protect, authorize('freelancer'), async (req, res) => {
       .sort('-createdAt');
     res.json({ proposals });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    sendError(res, error);
   }
 });
 
 router.get('/project/:projectId', protect, authorize('client'), async (req, res) => {
   try {
+    if (!isValidObjectId(req.params.projectId)) {
+      return res.status(400).json({ message: 'Invalid project ID.' });
+    }
     const project = await Project.findById(req.params.projectId);
+    if (!project) return res.status(404).json({ message: 'Project not found' });
     if (project.client.toString() !== req.user._id.toString()) {
       return res.status(403).json({ message: 'Not authorized' });
     }
@@ -56,12 +64,15 @@ router.get('/project/:projectId', protect, authorize('client'), async (req, res)
       
     res.json({ proposals });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    sendError(res, error);
   }
 });
 
 router.put('/:id/accept', protect, authorize('client'), async (req, res) => {
   try {
+    if (!isValidObjectId(req.params.id)) {
+      return res.status(400).json({ message: 'Invalid proposal ID.' });
+    }
     const proposal = await Proposal.findById(req.params.id);
     if (!proposal) return res.status(404).json({ message: 'Proposal not found' });
     
@@ -84,12 +95,15 @@ router.put('/:id/accept', protect, authorize('client'), async (req, res) => {
     
     res.json({ message: 'Proposal accepted', proposal });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    sendError(res, error);
   }
 });
 
 router.put('/:id/reject', protect, authorize('client'), async (req, res) => {
   try {
+    if (!isValidObjectId(req.params.id)) {
+      return res.status(400).json({ message: 'Invalid proposal ID.' });
+    }
     const proposal = await Proposal.findById(req.params.id);
     if (!proposal) return res.status(404).json({ message: 'Proposal not found' });
     
@@ -100,20 +114,24 @@ router.put('/:id/reject', protect, authorize('client'), async (req, res) => {
     await proposal.save();
     res.json({ message: 'Proposal rejected' });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    sendError(res, error);
   }
 });
 
 router.put('/:id/withdraw', protect, authorize('freelancer'), async (req, res) => {
   try {
+    if (!isValidObjectId(req.params.id)) {
+      return res.status(400).json({ message: 'Invalid proposal ID.' });
+    }
     const proposal = await Proposal.findById(req.params.id);
+    if (!proposal) return res.status(404).json({ message: 'Proposal not found' });
     if (proposal.freelancer.toString() !== req.user._id.toString()) return res.status(403).json({ message: 'Not authorized' });
     
     proposal.status = 'withdrawn';
     await proposal.save();
     res.json({ message: 'Proposal withdrawn' });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    sendError(res, error);
   }
 });
 

@@ -58,7 +58,10 @@ export default function Payments() {
   // ── Razorpay Payment Handler ──────────────────────────────────────────
   const handleRazorpayPayment = async () => {
     const amt = parseFloat(payAmount);
-    if (!amt || amt < 1) { toast.error('Enter a valid amount (min ₹1)'); return; }
+    if (!Number.isFinite(amt) || amt < 1 || amt > 50000) {
+      toast.error('Enter a valid amount between ₹1 and ₹50,000');
+      return;
+    }
 
     const loaded = await loadRazorpay();
     if (!loaded) { toast.error('Razorpay SDK failed to load. Check your connection.'); return; }
@@ -69,7 +72,7 @@ export default function Payments() {
       const { data: order } = await API.post('/payments/razorpay/create-order', {
         amount: Math.round(amt * 100), // paise
         currency: 'INR',
-        notes: { description: payNote || 'FleX Payment' },
+        description: payNote || 'FleX Payment',
       });
 
       const options = {
@@ -79,7 +82,6 @@ export default function Payments() {
         name: 'FleX Platform',
         description: payNote || 'Freelancing Payment',
         order_id: order.id,
-        image: 'https://via.placeholder.com/48x48/6c63ff/fff?text=F',
         prefill: {
           name: user?.name,
           email: user?.email,
@@ -88,12 +90,10 @@ export default function Payments() {
         handler: async (response) => {
           try {
             // Verify payment on backend
-            const { data: verified } = await API.post('/payments/razorpay/verify', {
+            await API.post('/payments/razorpay/verify', {
               razorpay_order_id: response.razorpay_order_id,
               razorpay_payment_id: response.razorpay_payment_id,
               razorpay_signature: response.razorpay_signature,
-              amount: amt,
-              description: payNote,
             });
             setSuccessModal({ amount: amt, paymentId: response.razorpay_payment_id });
             setPayModalOpen(false);
@@ -270,12 +270,12 @@ export default function Payments() {
             <div className="form-group">
               <label className="form-label">Amount (₹)</label>
               <input
-                type="number" min="1" step="0.01"
+                type="number" min="1" max="50000" step="0.01"
                 placeholder="e.g. 5000"
                 value={payAmount}
                 onChange={e => setPayAmount(e.target.value)}
               />
-              <span className="form-hint">Minimum ₹1 • Maximum ₹5,00,000</span>
+              <span className="form-hint">Minimum ₹1 • Maximum ₹50,000</span>
             </div>
 
             <div className="form-group">
@@ -311,7 +311,7 @@ export default function Payments() {
               onClick={handleRazorpayPayment}
               className="btn btn-primary"
               style={{ width: '100%', justifyContent: 'center', gap: 10 }}
-              disabled={paying || !payAmount || parseFloat(payAmount) < 1}
+              disabled={paying || !payAmount || parseFloat(payAmount) < 1 || parseFloat(payAmount) > 50000}
             >
               {paying ? <><span className="spinner" />Processing...</> : <><RazorpayBadge size={16} />Pay with Razorpay</>}
             </button>

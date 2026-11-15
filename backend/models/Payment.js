@@ -20,4 +20,6 @@ const paymentSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
+paymentSchema.index({ razorpayPaymentId: 1 }, { unique: true, sparse: true });
+
 module.exports = mongoose.model('Payment', paymentSchema);

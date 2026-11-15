@@ -4,6 +4,7 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const User = require('../models/User');
 const Project = require('../models/Project');
 const { protect, authorize } = require('../middleware/authMiddleware');
+const { isValidObjectId } = require('../utils/validate');
 
 const getModelName = () => {
   const modelName = process.env.GEMINI_MODEL;
@@ -60,6 +61,9 @@ router.post('/analyze-project', protect, async (req, res) => {
 router.post('/match-freelancers', protect, authorize('client'), async (req, res) => {
   try {
     const { projectId } = req.body;
+    if (!isValidObjectId(projectId)) {
+      return res.status(400).json({ message: 'Invalid project ID.' });
+    }
     const project = await Project.findById(projectId);
     if (!project) return res.status(404).json({ message: 'Project not found' });
     

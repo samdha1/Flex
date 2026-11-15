@@ -4,21 +4,28 @@ const Review = require('../models/Review');
 const Project = require('../models/Project');
 const User = require('../models/User');
 const { protect } = require('../middleware/authMiddleware');
+const { isValidObjectId, sendError } = require('../utils/validate');
 
 router.get('/project/:projectId', async (req, res) => {
   try {
+    if (!isValidObjectId(req.params.projectId)) {
+      return res.status(400).json({ message: 'Invalid project ID.' });
+    }
     const reviews = await Review.find({ project: req.params.projectId })
       .populate('reviewer', 'name avatar')
       .sort('-createdAt');
     res.json({ reviews });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    sendError(res, error);
   }
 });
 
 router.post('/', protect, async (req, res) => {
   try {
     const { projectId, rating, comment } = req.body;
+    if (!isValidObjectId(projectId)) {
+      return res.status(400).json({ message: 'Invalid project ID.' });
+    }
     
     const project = await Project.findById(projectId);
     if (!project) return res.status(404).json({ message: 'Project not found' });
@@ -52,7 +59,7 @@ router.post('/', protect, async (req, res) => {
     
     res.status(201).json({ review });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    sendError(res, error);
   }
 });
 

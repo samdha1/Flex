@@ -5,44 +5,26 @@ const crypto = require('crypto');
 const User = require('../models/User');
 const OTP = require('../models/OTP');
 const { protect } = require('../middleware/authMiddleware');
+const { normalizeEmail, sendError } = require('../utils/validate');
+const { createRateLimiter } = require('../middleware/rateLimit');
 
 const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
-const RATE_LIMIT_MAX_REQUESTS = 10;
-
-const createRateLimiter = () => {
-  const requestsByIp = new Map();
-  let lastCleanup = Date.now();
-
-  return (req, res, next) => {
-    const now = Date.now();
-    if (now - lastCleanup >= RATE_LIMIT_WINDOW_MS) {
-      for (const [ip, entry] of requestsByIp) {
-        if (entry.resetAt <= now) requestsByIp.delete(ip);
-      }
-      lastCleanup = now;
-    }
-
-    const ip = req.ip || req.socket.remoteAddress || 'unknown';
-    let entry = requestsByIp.get(ip);
-    if (!entry || entry.resetAt <= now) {
-      entry = { count: 0, resetAt: now + RATE_LIMIT_WINDOW_MS };
-      requestsByIp.set(ip, entry);
-    }
-
-    if (entry.count >= RATE_LIMIT_MAX_REQUESTS) {
-      res.set('Retry-After', Math.ceil((entry.resetAt - now) / 1000).toString());
-      return res.status(429).json({
-        message: 'Too many requests. Please try again after 15 minutes.',
-      });
-    }
-
-    entry.count += 1;
-    next();
-  };
-};
-
-const sendOtpRateLimiter = createRateLimiter();
-const loginRateLimiter = createRateLimiter();
+const sendOtpRateLimiter = createRateLimiter({
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  maxRequests: 10,
+  message: 'Too many OTP requests. Please try again after 15 minutes.',
+});
+const loginRateLimiter = createRateLimiter({
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  maxRequests: 20,
+  keyGenerator: (req, ip) => {
+    const email = req.body && typeof req.body.email === 'string'
+      ? req.body.email.trim().toLowerCase()
+      : '';
+    return `${ip}:${email}`;
+  },
+  message: 'Too many login attempts for this email and IP. Please try again after 15 minutes.',
+});
 
 const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET, {
@@ -83,7 +65,8 @@ const verifyOtp = async (email, otp) => {
 
 router.post('/send-otp', sendOtpRateLimiter, async (req, res) => {
   try {
-    const { email } = req.body;
+    const email = normalizeEmail(req.body && req.body.email);
+    if (!email) return res.status(400).json({ message: 'A valid email address is required.' });
     const code = crypto.randomInt(100000, 1000000).toString();
 
     await OTP.deleteMany({ email });
@@ -110,13 +93,19 @@ router.post('/send-otp', sendOtpRateLimiter, async (req, res) => {
 
     res.json({ message: 'OTP sent' });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    sendError(res, error);
   }
 });
 
 router.post('/verify-otp', async (req, res) => {
   try {
-    const { email, otp } = req.body;
+    const email = normalizeEmail(req.body && req.body.email);
+    if (!email) return res.status(400).json({ message: 'A valid email address is required.' });
+    const { otp } = req.body;
+    if (typeof otp !== 'string') {
+      return res.status(400).json({ message: 'OTP must be a string.' });
+    }
+
     const verification = await verifyOtp(email, otp);
     if (!verification.valid) {
       return res.status(verification.status).json({ message: verification.message });
@@ -131,19 +120,32 @@ router.post('/verify-otp', async (req, res) => {
 
     res.json({ verified: true, otpToken });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    sendError(res, error);
   }
 });
 
 router.post('/register', async (req, res) => {
   try {
-    const { name, email, password, role, otpToken } = req.body;
+    const email = normalizeEmail(req.body && req.body.email);
+    if (!email) return res.status(400).json({ message: 'A valid email address is required.' });
+    const { name, password, role, otpToken } = req.body;
 
-    if (!otpToken) return res.status(400).json({ message: 'OTP verification required' });
+    if (typeof name !== 'string') {
+      return res.status(400).json({ message: 'Name must be a string.' });
+    }
+    if (typeof password !== 'string' || password.length < 8 || password.length > 72) {
+      return res.status(400).json({ message: 'Password must be a string between 8 and 72 characters.' });
+    }
+    if (role !== 'client' && role !== 'freelancer') {
+      return res.status(400).json({ message: 'Role must be client or freelancer.' });
+    }
+    if (typeof otpToken !== 'string') {
+      return res.status(400).json({ message: 'OTP verification required' });
+    }
 
     let otpClaims;
     try {
-      otpClaims = jwt.verify(otpToken, process.env.JWT_SECRET);
+      otpClaims = jwt.verify(otpToken, process.env.JWT_SECRET, { algorithms: ['HS256'] });
     } catch (error) {
       return res.status(400).json({ message: 'OTP verification required' });
     }
@@ -164,13 +166,21 @@ router.post('/register', async (req, res) => {
       token: generateToken(user._id)
     });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    sendError(res, error);
   }
 });
 
 router.post('/login', loginRateLimiter, async (req, res) => {
   try {
-    const { email, password, otp } = req.body;
+    const email = normalizeEmail(req.body && req.body.email);
+    if (!email) return res.status(400).json({ message: 'A valid email address is required.' });
+    const { password, otp } = req.body;
+    if (typeof password !== 'string' || password.length < 8 || password.length > 72) {
+      return res.status(400).json({ message: 'Password must be a string between 8 and 72 characters.' });
+    }
+    if (otp !== undefined && typeof otp !== 'string') {
+      return res.status(400).json({ message: 'OTP must be a string.' });
+    }
     const user = await User.findOne({ email });
 
     if (user && (await user.matchPassword(password))) {
@@ -216,7 +226,7 @@ router.post('/login', loginRateLimiter, async (req, res) => {
       res.status(401).json({ message: 'Invalid email or password' });
     }
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    sendError(res, error);
   }
 });
 
@@ -225,13 +235,16 @@ router.get('/me', protect, async (req, res) => {
     const user = await User.findById(req.user._id).select('-password');
     res.json({ user });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    sendError(res, error);
   }
 });
 
 router.put('/update-profile', protect, async (req, res) => {
   try {
     const user = await User.findById(req.user._id);
+    if (req.body.name !== undefined && typeof req.body.name !== 'string') {
+      return res.status(400).json({ message: 'Name must be a string.' });
+    }
 
     ['name', 'bio', 'location', 'phone', 'title', 'hourlyRate', 'availability', 'company', 'industry'].forEach(field => {
       if (req.body[field] !== undefined) user[field] = req.body[field];
@@ -244,13 +257,19 @@ router.put('/update-profile', protect, async (req, res) => {
 
     res.json({ user });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    sendError(res, error);
   }
 });
 
 router.put('/change-password', protect, async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
+    if (typeof currentPassword !== 'string' || typeof newPassword !== 'string') {
+      return res.status(400).json({ message: 'Passwords must be strings.' });
+    }
+    if (newPassword.length < 8 || newPassword.length > 72) {
+      return res.status(400).json({ message: 'New password must be between 8 and 72 characters.' });
+    }
     const user = await User.findById(req.user._id);
 
     if (!(await user.matchPassword(currentPassword))) {
@@ -262,7 +281,7 @@ router.put('/change-password', protect, async (req, res) => {
 
     res.json({ message: 'Password changed successfully' });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    sendError(res, error);
   }
 });
 
