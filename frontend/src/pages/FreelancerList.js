@@ -1,27 +1,36 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import API from '../utils/api';
+import useDebouncedValue from '../hooks/useDebouncedValue';
+
+const formatRate = (rate) => (
+  Number.isFinite(Number(rate)) && Number(rate) > 0
+    ? `₹${Number(rate).toLocaleString()}/hr`
+    : 'Rate on request'
+);
 
 export default function FreelancerList() {
   const [freelancers, setFreelancers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [skill, setSkill] = useState('');
+  const debouncedSearch = useDebouncedValue(search);
+  const debouncedSkill = useDebouncedValue(skill);
 
   useEffect(() => {
     const fetch = async () => {
       setLoading(true);
       try {
         const params = new URLSearchParams();
-        if (search) params.set('search', search);
-        if (skill) params.set('skill', skill);
+        if (debouncedSearch) params.set('search', debouncedSearch);
+        if (debouncedSkill) params.set('skill', debouncedSkill);
         const { data } = await API.get(`/users/freelancers?${params}`);
         setFreelancers(data.freelancers || []);
       } catch (err) { console.error(err); }
       finally { setLoading(false); }
     };
     fetch();
-  }, [search, skill]);
+  }, [debouncedSearch, debouncedSkill]);
 
   return (
     <div className="page">
@@ -78,7 +87,7 @@ export default function FreelancerList() {
                       <div style={{ fontSize: '0.72rem', color: 'var(--text3)' }}>Rating</div>
                     </div>
                     <div style={{ textAlign: 'center' }}>
-                      <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, color: 'var(--green)' }}>₹{f.hourlyRate}/hr</div>
+                      <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, color: 'var(--green)' }}>{formatRate(f.hourlyRate)}</div>
                       <div style={{ fontSize: '0.72rem', color: 'var(--text3)' }}>Rate</div>
                     </div>
                     <div style={{ textAlign: 'center' }}>

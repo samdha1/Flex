@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import API from '../utils/api';
+import useDebouncedValue from '../hooks/useDebouncedValue';
 
 const CATEGORIES = [
   { value: '', label: 'All Categories' },
@@ -41,18 +42,24 @@ export default function Projects() {
     sort: 'newest',
   });
 
+  // Searching is debounced so typing does not fire a request per keystroke.
+  const debouncedSearch = useDebouncedValue(filters.search);
+
   const fetchProjects = useCallback(async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams({ page, limit: 10, ...filters });
-      Object.keys(filters).forEach(k => !filters[k] && params.delete(k));
+      const params = new URLSearchParams({ page, limit: 10 });
+      const activeFilters = { ...filters, search: debouncedSearch };
+      Object.entries(activeFilters).forEach(([key, value]) => {
+        if (value) params.set(key, value);
+      });
       const { data } = await API.get(`/projects?${params}`);
       setProjects(data.projects);
       setTotal(data.total);
       setPages(data.pages);
     } catch (err) { console.error(err); }
     finally { setLoading(false); }
-  }, [filters, page]);
+  }, [filters, page, debouncedSearch]);
 
   useEffect(() => { fetchProjects(); }, [fetchProjects]);
 

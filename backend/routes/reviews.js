@@ -5,16 +5,33 @@ const Project = require('../models/Project');
 const Proposal = require('../models/Proposal');
 const User = require('../models/User');
 const { protect } = require('../middleware/authMiddleware');
-const { isValidObjectId, sendError } = require('../utils/validate');
+const { isValidObjectId, parsePagination, sendError } = require('../utils/validate');
 
 router.get('/project/:projectId', async (req, res) => {
   try {
     if (!isValidObjectId(req.params.projectId)) {
       return res.status(400).json({ message: 'Invalid project ID.' });
     }
+    if (
+      (req.query.page !== undefined && typeof req.query.page !== 'string')
+      || (req.query.limit !== undefined && typeof req.query.limit !== 'string')
+    ) {
+      return res.status(400).json({ message: 'Query parameters must be strings.' });
+    }
+    const { page, limit } = parsePagination({ ...req.query, limit: req.query.limit || '50' }, { maxLimit: 50 });
+
+    // Reviews of private or unfinished listings must not be publicly readable.
+    const project = await Project.findById(req.params.projectId).select('status visibility');
+    if (!project) return res.status(404).json({ message: 'Project not found' });
+    if (['draft', 'cancelled'].includes(project.status) || project.visibility !== 'public') {
+      return res.status(404).json({ message: 'Project not found' });
+    }
+
     const reviews = await Review.find({ project: req.params.projectId })
       .populate('reviewer', 'name avatar')
-      .sort('-createdAt');
+      .sort('-createdAt')
+      .skip((page - 1) * limit)
+      .limit(limit);
     res.json({ reviews });
   } catch (error) {
     sendError(res, error);

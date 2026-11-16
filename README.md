@@ -84,9 +84,10 @@ Backend variables are documented with safe placeholders in [`backend/.env.exampl
 | `CLIENT_URL` | No | Frontend origin allowed by CORS. Comma-separated origins are accepted. |
 | `CLIENT_URLS` | No | Additional comma-separated frontend origins allowed by CORS. |
 | `GEMINI_API_KEY` | For AI recommendations | Google Gemini API key. |
-| `GEMINI_MODEL` | For AI recommendations | Gemini model name, for example `gemini-2.5-flash`. |
+| `GEMINI_MODEL` | For AI recommendations | Gemini model name, currently `gemini-3.8-flash`; choose a currently available model from [Google's models page](https://ai.google.dev/gemini-api/docs/models). |
 | `RAZORPAY_KEY_ID` | For payments | Razorpay key ID. |
 | `RAZORPAY_KEY_SECRET` | For payments | Razorpay secret; keep it private. |
+| `RAZORPAY_WEBHOOK_SECRET` | For Razorpay webhooks | Secret configured for Razorpay webhook signature verification; keep it private. |
 | `EMAIL_API_KEY` | For email OTP | Brevo transactional email API key. |
 | `FROM_EMAIL` | For email OTP | Verified sender email address configured in Brevo. |
 
@@ -109,6 +110,6 @@ The [`render.yaml`](./render.yaml) Blueprint defines a **single Node web service
 3. In the `flex` service's environment settings, set `MONGODB_URI` to your production MongoDB connection string and `JWT_SECRET` to a strong, unique secret. Render prompts for values marked `sync: false` in `render.yaml`; fill in only the integrations you use, including Brevo's `EMAIL_API_KEY` and verified `FROM_EMAIL` for email OTP.
 4. The Blueprint sets `REACT_APP_API_URL=/api`, so frontend API calls use the same domain. Chat connects to that domain over WebSocket as well.
 5. Set `CLIENT_URL` to the exact public origin of the combined service (scheme and hostname only, no path or trailing slash), for example `https://flex.onrender.com`. Render will ask for it when you apply the Blueprint. If you use multiple frontend origins, add them as a comma-separated `CLIENT_URLS` environment variable.
-6. Add any integration credentials you use (`GEMINI_API_KEY`, `GEMINI_MODEL`, `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `REACT_APP_RAZORPAY_KEY_ID`, `EMAIL_API_KEY`, and `FROM_EMAIL`) to the same Render service's environment settings. Keep secrets out of `render.yaml` and GitHub.
+6. Add any integration credentials you use (`GEMINI_API_KEY`, `GEMINI_MODEL`, `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`, `REACT_APP_RAZORPAY_KEY_ID`, `EMAIL_API_KEY`, and `FROM_EMAIL`) to the same Render service's environment settings. Keep secrets out of `render.yaml` and GitHub.
 
 The Render Blueprint keeps the frontend and backend in one Node web service: it installs dependencies from both lockfiles, builds `frontend/build` with `GENERATE_SOURCEMAP=false`, and starts Express, which serves the Flex app, `/api/...` routes, and Socket.IO on the same domain. `NODE_VERSION=22` provides the built-in `fetch` used for Brevo's HTTPS email API. `/health` always returns HTTP `200` with the process status and MongoDB connection state so Render can monitor the running service; `/health/db` returns HTTP `503` until MongoDB connects and HTTP `200` afterward.

@@ -38,7 +38,14 @@ export default function Profile() {
   const handleSave = async () => {
     setSaving(true);
     try {
-      const { data } = await API.put('/auth/update-profile', form);
+      // The API expects a number, while the input holds a string.
+      const payload = {
+        ...form,
+        hourlyRate: form.hourlyRate === '' || form.hourlyRate === null
+          ? ''
+          : Number(form.hourlyRate),
+      };
+      const { data } = await API.put('/auth/update-profile', payload);
       updateUser(data.user);
       toast.success('Profile updated successfully!');
     } catch (err) { toast.error(err.response?.data?.message || 'Update failed'); }
@@ -259,7 +266,9 @@ function ChangePasswordForm() {
     if (form.newPassword.length < 8) { toast.error('Password must be at least 8 chars'); return; }
     setLoading(true);
     try {
-      await API.put('/auth/change-password', { currentPassword: form.currentPassword, newPassword: form.newPassword });
+      const { data } = await API.put('/auth/change-password', { currentPassword: form.currentPassword, newPassword: form.newPassword });
+      // Changing the password revokes every older token, so keep the fresh one.
+      if (data?.token) localStorage.setItem('flex_token', data.token);
       toast.success('Password changed successfully');
       setForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
     } catch (err) { toast.error(err.response?.data?.message || 'Failed'); }

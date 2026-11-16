@@ -36,10 +36,6 @@ export default function Payments() {
 
   useEffect(() => { fetchTransactions(); }, [fetchTransactions]);
 
-  const totalAmount = transactions
-    .filter(t => t.status === 'completed')
-    .reduce((sum, t) => sum + (t.netAmount || t.amount), 0);
-
   const typeIcon = (type) => ({
     escrow_fund: '🔒',
     milestone_release: '✅',
@@ -101,7 +97,9 @@ export default function Payments() {
             setPayNote('');
             fetchTransactions(); // refresh
           } catch (err) {
-            toast.error('Payment verification failed. Contact support.');
+            toast.error(err.response?.data?.message || 'Payment verification failed. Contact support.');
+          } finally {
+            setPaying(false);
           }
         },
         modal: {

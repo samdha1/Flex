@@ -6,19 +6,20 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const { Server } = require('socket.io');
-const jwt = require('jsonwebtoken');
 const User = require('./models/User');
 const Conversation = require('./models/Conversation');
 const { isValidObjectId } = require('./utils/validate');
+const { verifyTokenClaims } = require('./middleware/authMiddleware');
+const { assertJwtSecret } = require('./utils/security');
 
 // Load env vars
 dotenv.config();
 
-if (!process.env.JWT_SECRET) {
-  throw new Error('JWT_SECRET must be set in all environments before starting the server.');
-}
+assertJwtSecret(process.env.JWT_SECRET);
 
-if (process.env.NODE_ENV === 'production') {
+const isProduction = process.env.NODE_ENV === 'production';
+
+if (isProduction) {
   const missingEnvVars = ['MONGODB_URI'].filter((key) => !process.env[key]);
   if (missingEnvVars.length) {
     throw new Error(`Missing required production environment variables: ${missingEnvVars.join(', ')}`);
@@ -28,7 +29,7 @@ if (process.env.NODE_ENV === 'production') {
 const frontendBuildPath = path.join(__dirname, '../frontend/build');
 const frontendIndexPath = path.join(frontendBuildPath, 'index.html');
 
-if (process.env.NODE_ENV === 'production' && !fs.existsSync(frontendIndexPath)) {
+if (isProduction && !fs.existsSync(frontendIndexPath)) {
   throw new Error('Frontend build is missing. Build frontend before starting the production server.');
 }
 
@@ -65,34 +66,59 @@ io.use(async (socket, next) => {
     return next(new Error('Authentication required.'));
   }
 
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] });
-    if (
-      typeof decoded !== 'object'
-      || decoded === null
-      || decoded.purpose !== undefined
-      || !isValidObjectId(decoded.id)
-    ) {
-      return next(new Error('Invalid authentication token.'));
-    }
+  const { claims, error } = verifyTokenClaims(token);
+  if (error) return next(new Error('Invalid authentication token.'));
 
-    const user = await User.findById(decoded.id).select('_id');
+  try {
+    const user = await User.findById(claims.id).select('-password');
     if (!user) return next(new Error('Authenticated user not found.'));
+    // Reject sockets authenticated with a token issued before a password change.
+    if (user.isTokenStale(claims.iat)) return next(new Error('Invalid authentication token.'));
+
     socket.data.userId = user._id.toString();
     next();
-  } catch (error) {
+  } catch (lookupError) {
     next(new Error('Invalid authentication token.'));
   }
 });
 
+// The React build uses inline styles, and Razorpay Checkout is an external
+// script/frame, so those are the only relaxations in the policy.
+const CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "script-src 'self' https://checkout.razorpay.com",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' https://fonts.gstatic.com data:",
+  "img-src 'self' data: blob: https:",
+  "connect-src 'self' https: wss:",
+  "frame-src https://api.razorpay.com https://checkout.razorpay.com",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join('; ');
+
 // Middleware
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(self "https://checkout.razorpay.com")');
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+  res.setHeader('Content-Security-Policy', CONTENT_SECURITY_POLICY);
+  if (req.secure) {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  next();
+});
 // Express CORS
 app.use(cors({
   origin: corsOrigin,
   credentials: true,
 }));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.post('/api/payments/razorpay/webhook', express.raw({ type: 'application/json', limit: '100kb' }));
+app.use(express.json({ limit: '100kb' }));
+app.use(express.urlencoded({ extended: false, limit: '100kb' }));
 
 // Socket connections
 io.on('connection', (socket) => {
@@ -171,20 +197,27 @@ app.get('/health/db', (req, res) => {
   });
 });
 
-// TODO: Remove this route after verifying the client IP reported by Render.
-app.get('/health/ip', (req, res) => {
-  res.json({ ip: req.ip });
-});
-
 app.use('/api', (req, res) => {
   res.status(404).json({ message: 'API route not found' });
 });
 
 if (fs.existsSync(frontendIndexPath)) {
-  app.use(express.static(frontendBuildPath));
+  app.use('/static', express.static(path.join(frontendBuildPath, 'static'), {
+    maxAge: '1y',
+    immutable: true,
+    fallthrough: false,
+  }));
+  app.use(express.static(frontendBuildPath, { index: false }));
   app.get('*', (req, res, next) => {
-    if (req.path.startsWith('/api/')) return next();
-    res.sendFile(frontendIndexPath, (error) => {
+    if (
+      !['GET', 'HEAD'].includes(req.method)
+      || path.extname(req.path)
+      || !(req.get('accept') || '').toLowerCase().includes('text/html')
+    ) {
+      return next();
+    }
+    res.setHeader('Cache-Control', 'no-cache');
+    res.sendFile(frontendIndexPath, { cacheControl: false }, (error) => {
       if (error) next(error);
     });
   });
@@ -197,7 +230,7 @@ if (fs.existsSync(frontendIndexPath)) {
 app.use((err, req, res, next) => {
   console.error(err);
   const status = err.status || err.statusCode || 500;
-  const message = status >= 500 && process.env.NODE_ENV === 'production'
+  const message = status >= 500 && isProduction
     ? 'Internal server error'
     : err.message || 'Something went wrong on the server';
   res.status(status).json({ message });

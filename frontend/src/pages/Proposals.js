@@ -117,7 +117,7 @@ export default function Proposals() {
                   </div>
                   <div style={{ textAlign: 'right' }}>
                     <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, color: 'var(--green)', fontSize: '1.1rem' }}>
-                      ₹{prop.bidAmount} <span style={{ fontWeight: 400, fontSize: '0.75rem', color: 'var(--text3)' }}>{prop.bidType}</span>
+                      ₹{Number(prop.bidAmount || 0).toLocaleString()}
                     </div>
                     <div style={{ color: 'var(--text3)', fontSize: '0.78rem', marginTop: 2 }}>{prop.deliveryTime} days delivery</div>
                     {statusBadge(prop.status)}
@@ -139,7 +139,7 @@ export default function Proposals() {
                 <div className="flex-between" style={{ flexWrap: 'wrap', gap: 10 }}>
                   <div style={{ color: 'var(--text3)', fontSize: '0.78rem' }}>
                     {new Date(prop.createdAt).toLocaleDateString()}
-                    {prop.status === 'pending' && ` · Expires ${new Date(prop.expiresAt).toLocaleDateString()}`}
+                    {prop.deliveryTime > 0 && ` · ${prop.deliveryTime} day delivery`}
                   </div>
                   <div style={{ display: 'flex', gap: 8 }}>
                     {user.role === 'client' && prop.status === 'pending' && (

@@ -71,6 +71,7 @@ export const AuthProvider = ({ children }) => {
 
   const updateUser = (updates) => {
     const updated = { ...user, ...updates };
+    delete updated.password;
     setUser(updated);
     localStorage.setItem('flex_user', JSON.stringify(updated));
   };

@@ -65,7 +65,7 @@ router.get('/:id/profile', async (req, res) => {
       return res.status(400).json({ message: 'Invalid user ID.' });
     }
     const user = await User.findById(req.params.id).select(
-      'name role title bio location skills hourlyRate availability portfolio rating reviewCount completedProjects avatar company industry createdAt -_id',
+      'name role title bio location skills hourlyRate availability portfolio rating reviewCount completedProjects avatar company industry createdAt',
     );
     if (!user) return res.status(404).json({ message: 'User not found' });
     res.json({ user });
@@ -118,6 +118,7 @@ router.delete('/portfolio/:itemId', protect, async (req, res) => {
       return res.status(400).json({ message: 'Invalid portfolio item ID.' });
     }
     const user = await User.findById(req.user._id);
+    if (!user) return res.status(404).json({ message: 'User not found.' });
     user.portfolio = user.portfolio.filter(item => item._id.toString() !== req.params.itemId);
     await user.save();
     res.json({ portfolio: user.portfolio });
@@ -131,18 +132,19 @@ router.get('/dashboard/stats', protect, async (req, res) => {
     const userId = req.user._id;
     let stats = {};
     
+    const user = await User.findById(userId)
+      .select('totalSpent totalEarnings completedProjects');
+
     if (req.user.role === 'client') {
       stats.totalProjects = await Project.countDocuments({ client: userId });
       stats.activeProjects = await Project.countDocuments({ client: userId, status: 'active' });
       stats.completedProjects = await Project.countDocuments({ client: userId, status: 'completed' });
-      const user = await User.findById(userId);
-      stats.totalSpent = user.totalSpent || 0;
+      stats.totalSpent = user?.totalSpent || 0;
     } else {
       stats.totalProposals = await Proposal.countDocuments({ freelancer: userId });
       stats.activeProjects = await Proposal.countDocuments({ freelancer: userId, status: 'accepted' });
-      const user = await User.findById(userId);
-      stats.completedProjects = user.completedProjects || 0;
-      stats.totalEarnings = user.totalEarnings || 0;
+      stats.completedProjects = user?.completedProjects || 0;
+      stats.totalEarnings = user?.totalEarnings || 0;
     }
     
     res.json({ stats });

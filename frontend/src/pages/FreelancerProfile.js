@@ -44,7 +44,11 @@ export default function FreelancerProfile() {
                   <div style={{ fontSize: '0.72rem', color: 'var(--text3)' }}>Rating</div>
                 </div>
                 <div style={{ textAlign: 'center' }}>
-                  <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, color: 'var(--green)', fontSize: '1.2rem' }}>₹{freelancer.hourlyRate}/hr</div>
+                  <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, color: 'var(--green)', fontSize: '1.2rem' }}>
+                    {Number(freelancer.hourlyRate) > 0
+                      ? `₹${Number(freelancer.hourlyRate).toLocaleString()}/hr`
+                      : 'On request'}
+                  </div>
                   <div style={{ fontSize: '0.72rem', color: 'var(--text3)' }}>Rate</div>
                 </div>
                 <div style={{ textAlign: 'center' }}>

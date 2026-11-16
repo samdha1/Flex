@@ -32,6 +32,7 @@ export default function Messages() {
   const [typing, setTyping] = useState(false);
   const messagesEndRef = useRef(null);
   const typingTimeout = useRef(null);
+  const activeConversationIdRef = useRef(null);
 
   useEffect(() => {
     const socketUrl = process.env.REACT_APP_SOCKET_URL
@@ -42,18 +43,36 @@ export default function Messages() {
       auth: { token: localStorage.getItem('flex_token') },
     });
     socket = currentSocket;
-    currentSocket.emit('join', user._id);
+    const handleConnect = () => {
+      currentSocket.emit('join');
+      const activeConversationId = activeConversationIdRef.current;
+      if (!activeConversationId) return;
+      currentSocket.emit('join_conversation', activeConversationId);
+      API.get(`/messages/${activeConversationId}`)
+        .then(({ data }) => {
+          if (activeConversationIdRef.current === activeConversationId) {
+            setMessages(previous => mergeMessages(data.messages, previous));
+          }
+        })
+        .catch((error) => console.error('Could not reload conversation messages:', error));
+    };
     const handleConnectError = (error) => {
       console.error('Socket connection failed:', error);
       toast.error('Chat connection failed. Please try again.');
     };
+    currentSocket.on('connect', handleConnect);
     currentSocket.on('connect_error', handleConnectError);
     return () => {
+      currentSocket.off('connect', handleConnect);
       currentSocket.off('connect_error', handleConnectError);
       currentSocket.disconnect();
       if (socket === currentSocket) socket = null;
     };
   }, [user._id]);
+
+  useEffect(() => {
+    activeConversationIdRef.current = activeConv?._id || null;
+  }, [activeConv]);
 
   useEffect(() => {
     const fetchConvs = async () => {
@@ -82,11 +101,22 @@ export default function Messages() {
     socket?.emit('join_conversation', activeConv._id);
     const handleMsg = (msg) => setMessages(prev => mergeMessages(prev, [msg]));
     const handleTyping = (data) => { if (data.userId !== user._id) setTyping(data.typing); };
+    // Refresh the read ticks when the other participant opens the conversation.
+    const handleRead = (payload) => {
+      if (!payload || payload.conversationId !== activeConv._id || payload.readerId === user._id) return;
+      setMessages(prev => prev.map((msg) => {
+        const readBy = msg.readBy || [];
+        if (msg.sender?._id !== user._id || readBy.includes(payload.readerId)) return msg;
+        return { ...msg, readBy: [...readBy, payload.readerId] };
+      }));
+    };
     socket?.on('receive_message', handleMsg);
     socket?.on('user_typing', handleTyping);
+    socket?.on('messages_read', handleRead);
     return () => {
       socket?.off('receive_message', handleMsg);
       socket?.off('user_typing', handleTyping);
+      socket?.off('messages_read', handleRead);
     };
   }, [activeConv, user._id]);
 
